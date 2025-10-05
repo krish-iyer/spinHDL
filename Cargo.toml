@@ -1,0 +1,11 @@
+[workspace]
+members = ["fbuild", "fbuild-cli"]
+
+[workspace.package]
+edition = "2025"
+version  = "0.0.1"
+license  = "GPLv3.0-only"
+authors  = ["Krishnan Iyer <krishnaniyer97@gmail.com>"]
+
+[workspace.dependencies]
+fbuild = { path = "fbuild" }
