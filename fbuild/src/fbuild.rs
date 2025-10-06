@@ -1,4 +1,5 @@
 use serde::{Deserialize, Deserializer};
+use std::collections::HashMap;
 use std::{env, fs, fs::File, path::Path, process::Command};
 use std::{io, io::Error, io::ErrorKind, io::Write};
 
@@ -15,6 +16,18 @@ pub enum Build {
 pub enum ModuleType {
     Static,
     Recon,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HierNode {
+    #[serde(default)]
+    pub rm: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModuleHierarchy {
+    #[serde(flatten)]
+    pub modules: HashMap<String, HierNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -63,6 +76,7 @@ pub struct BuildCfg {
     pub projectcfg: ProjectCfg,
     #[serde(rename = "design")]
     pub designcfg: Vec<DesignCfg>,
+    pub hier: Option<ModuleHierarchy>,
 }
 
 impl DesignCfg {
@@ -262,7 +276,7 @@ impl BuildCfg {
         Ok(())
     }
 
-    pub fn build_designs(&self) {
+    pub fn synth_designs(&self) {
         for design in &self.designcfg {
             let build_dir = &design.build_path;
             let cur_dir = env::current_dir().expect("Failed to get current directory");
@@ -283,15 +297,42 @@ impl BuildCfg {
                 panic!("Failed to create run synth tcl for {} : {}", design.name, e);
             }
 
+            // synth
             if design.build == Build::Synth {
                 if let Err(e) = self.run_synth() {
                     panic!("Run Synth failed for {} : {}", design.name, e);
                 }
             }
 
+            // symlink
+            match design.moduletype {
+                ModuleType::Recon => {
+                    let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
+                    let dst = format!("../{}.dcp", design.name);
+
+                    println!("Linking DCP: {} -> {}", src, dst);
+
+                    let status = Command::new("ln")
+                        .args(["-sf", &src, &dst])
+                        .status()
+                        .unwrap();
+
+                    if !status.success() {
+                        panic!("Failed to create symlink for {}", design.name);
+                    }
+                }
+
+                _ => {}
+            }
+
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
             println!("Generated TCL for design '{}'", design.name);
         }
+    }
+
+    pub fn build_designs(&self) {
+
+        self.synth_designs();
     }
 }
 
