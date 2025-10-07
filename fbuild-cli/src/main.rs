@@ -19,15 +19,15 @@ fn main() {
     println!("generating project");
     cfg.verify_build_setup();
 
-    if let Some(hier) = &cfg.hier {
-        println!("Verilog hierarchy:");
-        for (path, node) in &hier.modules {
+    // if let Some(hier) = &cfg.hier {
+    //     println!("Verilog hierarchy:");
+    //     for (path, node) in &hier.modules {
 
-            if let Some(rm) = &node.rm {
-                println!("{} -> {:?}", path, rm);
-            }
-        }
-    }
+    //         if let Some(rm) = &node.rm {
+    //             println!("{} -> {:?}", path, rm);
+    //         }
+    //     }
+    // }
 
-//    cfg.build_designs();
+    cfg.build_designs();
 }

@@ -1,5 +1,5 @@
+use crate::design_hier;
 use serde::{Deserialize, Deserializer};
-use std::collections::HashMap;
 use std::{env, fs, fs::File, path::Path, process::Command};
 use std::{io, io::Error, io::ErrorKind, io::Write};
 
@@ -16,18 +16,6 @@ pub enum Build {
 pub enum ModuleType {
     Static,
     Recon,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct HierNode {
-    #[serde(default)]
-    pub rm: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ModuleHierarchy {
-    #[serde(flatten)]
-    pub modules: HashMap<String, HierNode>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,12 +59,26 @@ pub struct DesignCfg {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct RootDesign {
+    pub design: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BuildCfg {
     #[serde(rename = "project")]
     pub projectcfg: ProjectCfg,
     #[serde(rename = "design")]
     pub designcfg: Vec<DesignCfg>,
-    pub hier: Option<ModuleHierarchy>,
+    pub root: RootDesign,
+    pub hier: Vec<design_hier::DesignEntry>,
+    #[serde(skip)]
+    pub design_graph: design_hier::HierarchyGraph,
+}
+
+pub struct PrXdc {
+    project_name: String,
+    instance_name: String,
+    region: String,
 }
 
 impl DesignCfg {
@@ -164,6 +166,26 @@ impl BuildCfg {
             design.verify_files_exist();
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
+        }
+    }
+
+    pub fn parse_hierarchy(&mut self) {
+        for d in &self.hier {
+            self.design_graph.add_design(&d.name);
+            for m in &d.modules {
+                self.design_graph.add_module(&m.name, m.region.as_deref());
+                self.design_graph.connect_design_to_module(&d.name, &m.name);
+            }
+        }
+
+        for d in &self.hier {
+            for m in &d.modules {
+                for impl_design in &m.rm {
+                    self.design_graph.add_design(impl_design);
+                    self.design_graph
+                        .connect_module_to_design_impl(&m.name, impl_design);
+                }
+            }
         }
     }
 
@@ -305,34 +327,145 @@ impl BuildCfg {
             }
 
             // symlink
-            match design.moduletype {
-                ModuleType::Recon => {
-                    let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
-                    let dst = format!("../{}.dcp", design.name);
+            // match design.moduletype {
+            //     ModuleType::Recon => {
+            let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
+            let dst = format!("../{}.dcp", design.name);
 
-                    println!("Linking DCP: {} -> {}", src, dst);
+            println!("Linking DCP: {} -> {}", src, dst);
 
-                    let status = Command::new("ln")
-                        .args(["-sf", &src, &dst])
-                        .status()
-                        .unwrap();
+            let status = Command::new("ln")
+                .args(["-sf", &src, &dst])
+                .status()
+                .unwrap();
 
-                    if !status.success() {
-                        panic!("Failed to create symlink for {}", design.name);
-                    }
-                }
-
-                _ => {}
+            if !status.success() {
+                panic!("Failed to create symlink for {}", design.name);
             }
+            //     }
+            //     _ => {}
+            // }
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
             println!("Generated TCL for design '{}'", design.name);
         }
     }
 
-    pub fn build_designs(&self) {
+    pub fn create_pr_xdc(&self, constr: &PrXdc) -> io::Result<()> {
+        // Ensure root design exists
 
+        let tcl_path = "create_pr_xdc.tcl";
+
+        let mut tcl = File::create(tcl_path)?;
+
+        writeln!(tcl, "open_project {}.xpr", constr.project_name)?;
+        writeln!(tcl, "open_run synth_1 -name synth_1")?;
+        writeln!(
+            tcl,
+            "set_property target_constrs_file pr_{}.xdc [current_fileset -constrset]",
+            constr.project_name
+        )?;
+
+        writeln!(tcl, "startgroup")?;
+        writeln!(tcl, "create_pblock pblock_{}", constr.instance_name)?;
+        writeln!(
+            tcl,
+            "resize_pblock pblock_{} -add {}",
+            constr.instance_name, constr.region
+        )?;
+        writeln!(
+            tcl,
+            "add_cells_to_pblock pblock_{} [get_cells [list {}]] -clear_locs",
+            constr.instance_name, constr.instance_name
+        )?;
+        writeln!(tcl, "endgroup")?;
+
+        writeln!(
+            tcl,
+            "set_property SNAPPING_MODE ON [get_pblocks pblock_{}]",
+            constr.instance_name
+        )?;
+        writeln!(
+            tcl,
+            "set_property RESET_AFTER_RECONFIG 1 [get_pblocks pblock_{}]",
+            constr.instance_name
+        )?;
+        writeln!(
+            tcl,
+            "set_property HD.RECONFIGURABLE 1 [get_cells {}]",
+            constr.instance_name
+        )?;
+        writeln!(tcl, "save_constraints -force")?;
+        writeln!(tcl, "close_project")?;
+
+        println!(
+            "Generated partial reconfiguration XDC for '{}'",
+            constr.project_name
+        );
+        Ok(())
+    }
+
+    pub fn run_create_pr_xdc(&self) -> io::Result<()> {
+        let xdc_path = "pr_main.xdc";
+        File::create(xdc_path)?;
+
+        let status = Command::new("vivado")
+            .args([
+                "-nojournal",
+                "-nolog",
+                "-mode",
+                "batch",
+                "-source",
+                "create_pr_xdc.tcl",
+            ])
+            .status()?;
+
+        if !status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Vivado failed to create PR XDC"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn build_designs(&mut self) {
+        // synth designs
         self.synth_designs();
+
+        if let Some(root_design) = self.root.design.take() {
+            // PR flow
+            self.design_graph = design_hier::HierarchyGraph::new();
+
+            self.parse_hierarchy();
+
+            let pr_node = self.design_graph.get_child_nodes(&root_design, true);
+            println!("{:?}", pr_node);
+
+            let pr_constr = match &pr_node[0] {
+                design_hier::NodeKind::Module { name, region } => PrXdc {
+                    project_name: root_design.clone(),
+                    instance_name: name.clone(),
+                    region: region.clone().unwrap_or_default(),
+                },
+                _ => panic!("Expected Module but received Design node"),
+            };
+
+            let build_dir = format!("{}/{}", self.projectcfg.build_dir, root_design);
+            let cur_dir = env::current_dir().expect("Failed to get current directory");
+
+            env::set_current_dir(build_dir).expect("Failed to change directory to build");
+
+            if let Err(e) = self.create_pr_xdc(&pr_constr) {
+                panic! {"Failed to create PR XDC {}", e};
+            };
+
+            if let Err(e) = self.run_create_pr_xdc() {
+                panic! {"Failed to run create PR XDC {}", e};
+            };
+
+            env::set_current_dir(cur_dir).expect("Failed to change directory to build");
+        }
     }
 }
 
