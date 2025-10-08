@@ -266,7 +266,6 @@ impl BuildCfg {
                     "write_checkpoint -force {}/runs/synth_1/{}.dcp",
                     design.name, design.name
                 )?;
-                writeln!(synth_tcl, "write_checkpoint -force ../{}.dcp", design.name)?;
                 writeln!(synth_tcl, "close_project")?;
             }
 
@@ -330,22 +329,33 @@ impl BuildCfg {
             // symlink
             // match design.moduletype {
             //     ModuleType::Recon => {
-            // let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
-            // let dst = format!("../{}.dcp", design.name);
+            let src = format!(
+                "{}/{}/{}/runs/synth_1/{}.dcp",
+                cur_dir.to_string_lossy().to_string(),
+                build_dir,
+                design.name,
+                design.name
+            );
+            let dst = format!(
+                "{}/{}/{}.dcp",
+                cur_dir.to_string_lossy().to_string(),
+                self.projectcfg.build_dir,
+                design.name
+            );
 
-            // println!("Linking DCP: {} -> {}", src, dst);
+            println!("Linking DCP: {} -> {}", src, dst);
 
-            // let status = Command::new("ln")
-            //     .args(["-sf", &src, &dst])
-            //     .status()
-            //     .unwrap();
+            let status = Command::new("ln")
+                .args(["-sf", &src, &dst])
+                .status()
+                .unwrap();
 
-            // if !status.success() {
-            //     panic!("Failed to create symlink for {}", design.name);
+            if !status.success() {
+                panic!("Failed to create symlink for {}", design.name);
+            }
+            //     }
+            //     _ => {}
             // }
-            // //     }
-            // //     _ => {}
-            // // }
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
             println!("Generated TCL for design '{}'", design.name);
