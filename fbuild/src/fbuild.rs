@@ -266,6 +266,7 @@ impl BuildCfg {
                     "write_checkpoint -force {}/runs/synth_1/{}.dcp",
                     design.name, design.name
                 )?;
+                writeln!(synth_tcl, "write_checkpoint -force ../{}.dcp", design.name)?;
                 writeln!(synth_tcl, "close_project")?;
             }
 
@@ -329,29 +330,29 @@ impl BuildCfg {
             // symlink
             // match design.moduletype {
             //     ModuleType::Recon => {
-            let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
-            let dst = format!("../{}.dcp", design.name);
+            // let src = format!("{}/runs/synth_1/{}.dcp", design.name, design.name);
+            // let dst = format!("../{}.dcp", design.name);
 
-            println!("Linking DCP: {} -> {}", src, dst);
+            // println!("Linking DCP: {} -> {}", src, dst);
 
-            let status = Command::new("ln")
-                .args(["-sf", &src, &dst])
-                .status()
-                .unwrap();
+            // let status = Command::new("ln")
+            //     .args(["-sf", &src, &dst])
+            //     .status()
+            //     .unwrap();
 
-            if !status.success() {
-                panic!("Failed to create symlink for {}", design.name);
-            }
-            //     }
-            //     _ => {}
+            // if !status.success() {
+            //     panic!("Failed to create symlink for {}", design.name);
             // }
+            // //     }
+            // //     _ => {}
+            // // }
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
             println!("Generated TCL for design '{}'", design.name);
         }
     }
 
-    pub fn create_pr_xdc(&self, constr: &PrXdc) -> io::Result<()> {
+    pub fn create_pr_xdc_tcl(&self, constr: &PrXdc) -> io::Result<()> {
         // Ensure root design exists
 
         let tcl_path = "create_pr_xdc.tcl";
@@ -429,6 +430,157 @@ impl BuildCfg {
         Ok(())
     }
 
+    pub fn run_route(&self) -> io::Result<()> {
+        let status = Command::new("vivado")
+            .args([
+                "-nojournal",
+                "-nolog",
+                "-mode",
+                "batch",
+                "-source",
+                "route_pr.tcl",
+            ])
+            .status()?;
+
+        if !status.success() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Vivado failed to route"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn create_route_tcl(&self, root_design: &String) -> io::Result<()> {
+        let pr_node = self.design_graph.get_child_nodes(&root_design, true);
+
+        // TODO: Fix this; you are being sloppy
+        let pr_inst = match &pr_node[0] {
+            design_hier::NodeKind::Module { name, region } => PrXdc {
+                project_name: root_design.clone(),
+                instance_name: name.clone(),
+                region: region.clone().unwrap_or_default(),
+            },
+            _ => panic!("Expected Module but received Design node"),
+        };
+
+        let rm_designs = self
+            .design_graph
+            .get_child_nodes(&pr_inst.instance_name, false);
+
+        let tcl_path = "route_pr.tcl";
+
+        let mut tcl = File::create(tcl_path)?;
+
+        writeln!(tcl, "open_project {}.xpr", root_design)?;
+        writeln!(tcl, "open_run synth_1 -name synth_1")?;
+
+        for (i, rm) in rm_designs.iter().enumerate() {
+            match rm {
+                design_hier::NodeKind::Design { name } => {
+                    writeln!(
+                        tcl,
+                        "read_checkpoint -cell [get_cells {}] ../{}.dcp",
+                        pr_inst.instance_name, name
+                    )?;
+
+                    writeln!(tcl, "opt_design")?;
+                    writeln!(tcl, "place_design")?;
+                    writeln!(tcl, "route_design")?;
+
+                    writeln!(tcl, "write_checkpoint -force {}_routed.dcp", name)?;
+
+                    writeln!(
+                        tcl,
+                        "update_design -cell [get_cells {}] -black_box",
+                        pr_inst.instance_name
+                    )?;
+
+                    if i == 0 {
+                        // only lock in the first iter
+                        writeln!(tcl, "lock -level routing")?;
+                    }
+                }
+                _ => panic!("Received a Module when Design was expected!"),
+            }
+        }
+        writeln!(tcl, "close_project")?;
+
+        Ok(())
+    }
+
+    pub fn create_bitstream_tcl(&self, root_design: &String) -> io::Result<()> {
+        let pr_node = self.design_graph.get_child_nodes(&root_design, true);
+
+        // TODO: Fix this; you are being sloppy
+        let pr_inst = match &pr_node[0] {
+            design_hier::NodeKind::Module { name, region } => PrXdc {
+                project_name: root_design.clone(),
+                instance_name: name.clone(),
+                region: region.clone().unwrap_or_default(),
+            },
+            _ => panic!("Expected Module but received Design node"),
+        };
+
+        let rm_designs = self
+            .design_graph
+            .get_child_nodes(&pr_inst.instance_name, false);
+
+        for rm in &rm_designs {
+            match rm {
+                design_hier::NodeKind::Design { name } => {
+                    let tcl_path = format!("generate_bit_{}.tcl", name);
+
+                    let mut tcl = File::create(&tcl_path)?;
+
+                    // Write TCL commands
+                    writeln!(tcl, "open_project {}.xpr", root_design)?;
+                    writeln!(tcl, "open_checkpoint {}_routed.dcp", name)?;
+                    writeln!(tcl, "write_bitstream -force -bin_file {}.bit", name)?;
+                    writeln!(tcl, "write_debug_probes -force {}.ltx", name)?;
+                    writeln!(tcl, "write_hw_platform -fixed -force {}.xsa", name)?;
+                    writeln!(
+                        tcl,
+                        "write_cfgmem -force -format BIN -interface SMAPx32 \
+                         -loadbit \"up 0x0 {}_pblock_{}_partial.bit\" \"{}_part.bin\"",
+                        name, pr_inst.instance_name, name
+                    )?;
+                    writeln!(tcl, "close_design")?;
+                    writeln!(tcl, "close_project")?;
+                }
+                _ => panic!("Failed to create bitstreams tcl"),
+            }
+        }
+
+        for rm in &rm_designs {
+            match rm {
+                design_hier::NodeKind::Design { name } => {
+                    let tcl_path = format!("generate_bit_{}.tcl", name);
+                    let status = Command::new("vivado")
+                        .args([
+                            "-nojournal",
+                            "-nolog",
+                            "-mode",
+                            "batch",
+                            "-source",
+                            &tcl_path,
+                        ])
+                        .status()?;
+
+                    if !status.success() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            format!("Vivado failed to create PR XDC"),
+                        ));
+                    }
+                }
+                _ => panic!("Failed to create bitstreams tcl"),
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn build_designs(&mut self) {
         // synth designs
         self.synth_designs();
@@ -456,12 +608,28 @@ impl BuildCfg {
 
             env::set_current_dir(build_dir).expect("Failed to change directory to build");
 
-            if let Err(e) = self.create_pr_xdc(&pr_constr) {
+            // create pr_xdc tcl
+            if let Err(e) = self.create_pr_xdc_tcl(&pr_constr) {
                 panic! {"Failed to create PR XDC {}", e};
             };
 
+            // execute pr_xdc
             if let Err(e) = self.run_create_pr_xdc() {
                 panic! {"Failed to run create PR XDC {}", e};
+            };
+
+            // create route tcl
+            if let Err(e) = self.create_route_tcl(&root_design) {
+                panic! {"Failed to create PR XDC {}", e};
+            };
+
+            // route
+            if let Err(e) = self.run_route() {
+                panic! {"Failed to create Route {}", e};
+            };
+            // bitgen
+            if let Err(e) = self.create_bitstream_tcl(&root_design) {
+                panic! {"Failed to create Route {}", e};
             };
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
