@@ -1,8 +1,8 @@
 [package]
-name = "fbuild-cli"
+name = "spinhdl-cli"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-fbuild = { workspace = true }
+spinhdl = { workspace = true }
 toml = "0.9"

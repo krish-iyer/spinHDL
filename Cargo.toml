@@ -1,5 +1,5 @@
 [workspace]
-members = ["fbuild", "fbuild-cli"]
+members = ["spinhdl", "spinhdl-cli"]
 
 [workspace.package]
 edition = "2025"
@@ -8,4 +8,4 @@ license  = "GPLv3.0-only"
 authors  = ["Krishnan Iyer <krishnaniyer97@gmail.com>"]
 
 [workspace.dependencies]
-fbuild = { path = "fbuild" }
+spinhdl = { path = "spinhdl" }

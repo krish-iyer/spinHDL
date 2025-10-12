@@ -1,5 +1,5 @@
 use std::{env, fs, path::PathBuf};
-use fbuild::BuildCfg;
+use spinhdl::BuildCfg;
 
 fn main() {
     let cli_args: Vec<String> = env::args().collect();
