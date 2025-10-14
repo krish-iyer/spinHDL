@@ -1,5 +1,5 @@
 [workspace]
-members = ["spinhdl", "spinhdl-cli"]
+members = ["spinhdl_core", "spinhdl_cli"]
 
 [workspace.package]
 edition = "2025"
@@ -8,4 +8,4 @@ license  = "GPLv3.0-only"
 authors  = ["Krishnan Iyer <krishnaniyer97@gmail.com>"]
 
 [workspace.dependencies]
-spinhdl = { path = "spinhdl" }
+spinhdl_core = { path = "spinhdl_core" }
