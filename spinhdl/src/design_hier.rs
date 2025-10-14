@@ -142,3 +142,6 @@ impl HierarchyGraph {
         out
     }
 }
+
+#[cfg(test)]
+mod test_design_hier;
