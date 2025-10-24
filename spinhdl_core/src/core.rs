@@ -1,9 +1,9 @@
 use crate::design_hier;
 
 use super::init::*;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize};
 use std::{env, fs, fs::File, path::Path, process::Command};
-use std::{io, io::Error, io::ErrorKind, io::Write};
+use std::{io, io::Error, io::ErrorKind};
 
 pub mod create_tcl;
 

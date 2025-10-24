@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use spinhdl_core::BuildCfg;
-use std::{env, fs, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 #[derive(Parser)]
 #[command(name = "spinhdl", about = "HDL project build and generation tool")]
