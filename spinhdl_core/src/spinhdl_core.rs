@@ -253,7 +253,7 @@ impl BuildCfg {
         Ok(())
     }
 
-    pub fn create_run_synth_tcl(&self, design: &DesignCfg) -> io::Result<()> {
+    pub fn create_synth_tcl(&self, design: &DesignCfg) -> io::Result<()> {
         let synth_tcl_path = "run_synth.tcl";
         let mut synth_tcl = File::create(&synth_tcl_path).expect("Failed to create run_synth.tcl");
 
@@ -280,7 +280,16 @@ impl BuildCfg {
         Ok(())
     }
 
-    pub fn run_synth(&self) -> io::Result<()> {
+    pub fn run_tcl(&self, tcl: &str) -> io::Result<()> {
+
+        // check if the tcl exists
+         if !Path::new(tcl).exists() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                format!("TCL file not found: {}", tcl),
+            ));
+        }
+
         let status = Command::new("vivado")
             .args([
                 "-nojournal",
@@ -288,12 +297,12 @@ impl BuildCfg {
                 "-mode",
                 "batch",
                 "-source",
-                "run_synth.tcl",
+                tcl,
             ])
             .status()?;
 
         if !status.success() {
-            return Err(Error::new(ErrorKind::Other, format!("Run Synth failed")));
+            return Err(Error::new(ErrorKind::Other, "Vivado TCL execution failed"));
         }
 
         Ok(())
@@ -316,13 +325,13 @@ impl BuildCfg {
                 panic!("Vivado failed for {} : {}", design.name, e);
             }
 
-            if let Err(e) = self.create_run_synth_tcl(design) {
+            if let Err(e) = self.create_synth_tcl(design) {
                 panic!("Failed to create run synth tcl for {} : {}", design.name, e);
             }
 
             // synth
             if design.build == Build::Synth {
-                if let Err(e) = self.run_synth() {
+                if let Err(e) = self.run_tcl("run_synth.tcl") {
                     panic!("Run Synth failed for {} : {}", design.name, e);
                 }
             }
@@ -414,51 +423,6 @@ impl BuildCfg {
             "Generated partial reconfiguration XDC for '{}'",
             constr.project_name
         );
-        Ok(())
-    }
-
-    pub fn run_create_pr_xdc(&self) -> io::Result<()> {
-        let xdc_path = "pr_main.xdc";
-        File::create(xdc_path)?;
-
-        let status = Command::new("vivado")
-            .args([
-                "-nojournal",
-                "-nolog",
-                "-mode",
-                "batch",
-                "-source",
-                "create_pr_xdc.tcl",
-            ])
-            .status()?;
-
-        if !status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Vivado failed to create PR XDC"),
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn run_route(&self) -> io::Result<()> {
-        let status = Command::new("vivado")
-            .args([
-                "-nojournal",
-                "-nolog",
-                "-mode",
-                "batch",
-                "-source",
-                "route_pr.tcl",
-            ])
-            .status()?;
-
-        if !status.success() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Vivado failed to route"),
-            ));
-        }
         Ok(())
     }
 
@@ -563,34 +527,41 @@ impl BuildCfg {
             }
         }
 
+        Ok(())
+    }
+
+    pub fn gen_bitstreams(&self, root_design: &String) -> io::Result<()> {
+        let pr_node = self.design_graph.get_child_nodes(&root_design, true);
+
+        // TODO: Fix this; you are being sloppy
+        let pr_inst = match &pr_node[0] {
+            design_hier::NodeKind::Module { name, region } => PrXdc {
+                project_name: root_design.clone(),
+                instance_name: name.clone(),
+                region: region.clone().unwrap_or_default(),
+            },
+            _ => panic!("Expected Module but received Design node"),
+        };
+
+        let rm_designs = self
+            .design_graph
+            .get_child_nodes(&pr_inst.instance_name, false);
+
         for rm in &rm_designs {
             match rm {
                 design_hier::NodeKind::Design { name } => {
                     let tcl_path = format!("generate_bit_{}.tcl", name);
-                    let status = Command::new("vivado")
-                        .args([
-                            "-nojournal",
-                            "-nolog",
-                            "-mode",
-                            "batch",
-                            "-source",
-                            &tcl_path,
-                        ])
-                        .status()?;
-
-                    if !status.success() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("Vivado failed to create PR XDC"),
-                        ));
-                    }
+                    if let Err(e) = self.run_tcl(&tcl_path) {
+                        panic! {"Failed to run bitstreams generation {}", e};
+                    };
                 }
-                _ => panic!("Failed to create bitstreams tcl"),
+                _ => panic!("Failed to run bitstreams tcl"),
             }
         }
 
         Ok(())
     }
+
 
     pub fn build_designs(&mut self) {
         // synth designs
@@ -624,8 +595,14 @@ impl BuildCfg {
                 panic! {"Failed to create PR XDC {}", e};
             };
 
+            // create a empty file to exec tcl file :  TODO: fix this. may be force creation of the file.
+            let xdc_path = "pr_main.xdc";
+            if let Err(e) = File::create(xdc_path) {
+                panic! {"Failed to create pr_main.xdc file {}", e};
+            }
+
             // execute pr_xdc
-            if let Err(e) = self.run_create_pr_xdc() {
+            if let Err(e) = self.run_tcl("create_pr_xdc.tcl") {
                 panic! {"Failed to run create PR XDC {}", e};
             };
 
@@ -635,11 +612,15 @@ impl BuildCfg {
             };
 
             // route
-            if let Err(e) = self.run_route() {
+            if let Err(e) = self.run_tcl("route_pr.tcl") {
                 panic! {"Failed to create Route {}", e};
             };
             // bitgen
             if let Err(e) = self.create_bitstream_tcl(&root_design) {
+                panic! {"Failed to create Route {}", e};
+            };
+
+            if let Err(e) = self.gen_bitstreams(&root_design) {
                 panic! {"Failed to create Route {}", e};
             };
 
