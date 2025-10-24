@@ -1,5 +1,6 @@
 use crate::design_hier;
 
+use super::init::*;
 use serde::{Deserialize, Deserializer};
 use std::{env, fs, fs::File, path::Path, process::Command};
 use std::{io, io::Error, io::ErrorKind, io::Write};
@@ -30,36 +31,6 @@ pub struct ProjectCfg {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DesignCfg {
-    pub name: String,
-    pub top: String,
-    pub rtl_dir: String,
-    #[serde(deserialize_with = "parse_files_list")]
-    pub rtl: Vec<String>,
-    pub xdc_dir: String,
-    #[serde(deserialize_with = "parse_files_list")]
-    pub xdc: Vec<String>,
-    pub xci_dir: String,
-    #[serde(deserialize_with = "parse_files_list")]
-    pub xci: Vec<String>,
-    pub ip_dir: String,
-    #[serde(deserialize_with = "parse_files_list")]
-    pub ip: Vec<String>,
-    pub build: Build,
-    pub moduletype: ModuleType,
-    #[serde(skip)]
-    pub rtl_files: Vec<String>,
-    #[serde(skip)]
-    pub xdc_files: Vec<String>,
-    #[serde(skip)]
-    pub xci_files: Vec<String>,
-    #[serde(skip)]
-    pub ip_files: Vec<String>,
-    #[serde(skip)]
-    pub build_path: String,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct RootDesign {
     pub design: Option<String>,
 }
@@ -80,52 +51,6 @@ pub struct PrXdc {
     project_name: String,
     instance_name: String,
     region: String,
-}
-
-impl DesignCfg {
-    pub fn populate_files(&mut self) {
-        self.rtl_files = populate_files_list(&self.rtl_dir, &self.rtl);
-        self.xdc_files = populate_files_list(&self.xdc_dir, &self.xdc);
-        self.xci_files = populate_files_list(&self.xci_dir, &self.xci);
-        self.ip_files = populate_files_list(&self.ip_dir, &self.ip);
-    }
-
-    pub fn verify_files_exist(&self) {
-        for file in &self.rtl_files {
-            if !std::path::Path::new(file).exists() {
-                println!("Missing RTL file: {}", file);
-                panic!("Files missing");
-            }
-        }
-
-        if self.xdc_files.len() > 0 {
-            for file in &self.xdc_files {
-                if !std::path::Path::new(file).exists() {
-                    println!("Missing XDC file: {}", file);
-                    panic!("Files missing");
-                }
-            }
-        }
-
-        if self.xci_files.len() > 0 {
-            for file in &self.xci_files {
-                if !std::path::Path::new(file).exists() {
-                    println!("Missing XCI file: {}", file);
-                    panic!("Files missing");
-                }
-            }
-        }
-
-        if self.ip_files.len() > 0 {
-            for file in &self.ip_files {
-                if !std::path::Path::new(file).exists() {
-                    println!("Missing IP file: {}", file);
-                    panic!("Files missing");
-                }
-            }
-        }
-        println!("All RTL files exist for '{}'", self.name);
-    }
 }
 
 impl ProjectCfg {
@@ -281,9 +206,8 @@ impl BuildCfg {
     }
 
     pub fn run_tcl(&self, tcl: &str) -> io::Result<()> {
-
         // check if the tcl exists
-         if !Path::new(tcl).exists() {
+        if !Path::new(tcl).exists() {
             return Err(Error::new(
                 ErrorKind::NotFound,
                 format!("TCL file not found: {}", tcl),
@@ -291,14 +215,7 @@ impl BuildCfg {
         }
 
         let status = Command::new("vivado")
-            .args([
-                "-nojournal",
-                "-nolog",
-                "-mode",
-                "batch",
-                "-source",
-                tcl,
-            ])
+            .args(["-nojournal", "-nolog", "-mode", "batch", "-source", tcl])
             .status()?;
 
         if !status.success() {
@@ -562,7 +479,6 @@ impl BuildCfg {
         Ok(())
     }
 
-
     pub fn build_designs(&mut self) {
         // synth designs
         self.synth_designs();
@@ -627,22 +543,4 @@ impl BuildCfg {
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
         }
     }
-}
-
-fn parse_files_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let s = String::deserialize(deserializer)?;
-    Ok(s.split(',')
-        .map(|f| f.trim().to_string())
-        .filter(|f| !f.is_empty())
-        .collect())
-}
-
-fn populate_files_list(dir: &str, files: &Vec<String>) -> Vec<String> {
-    files
-        .iter()
-        .map(|f| format!("{}/{}", dir.trim_end_matches('/'), f))
-        .collect()
 }
