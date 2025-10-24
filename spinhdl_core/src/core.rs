@@ -285,7 +285,8 @@ impl BuildCfg {
                 panic! {"Failed to create PR XDC {}", e};
             };
 
-            // create a empty file to exec tcl file :  TODO: fix this. may be force creation of the file.
+            // create a empty file to exec tcl file :
+            // TODO: fix this. may be force creation of the file.
             let xdc_path = "pr_main.xdc";
             if let Err(e) = File::create(xdc_path) {
                 panic! {"Failed to create pr_main.xdc file {}", e};
@@ -305,6 +306,7 @@ impl BuildCfg {
             if let Err(e) = self.run_tcl("route_pr.tcl") {
                 panic! {"Failed to create Route {}", e};
             };
+
             // bitgen
             if let Err(e) = self.create_bitstream_tcl(&root_design) {
                 panic! {"Failed to create Route {}", e};
