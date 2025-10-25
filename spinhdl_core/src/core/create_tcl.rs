@@ -233,4 +233,101 @@ impl BuildCfg {
 
         Ok(())
     }
+
+    pub fn create_zynq_driver_tcl(&self, dir: &String) -> io::Result<()> {
+        let tcl_path = "zynq_driver.tcl";
+        let mut tcl = File::create(tcl_path)?;
+
+        // Header and source imports
+        writeln!(tcl, "source ~/.tools/Xilinx/Vitis/2022.2/scripts/vitis/util/zynqmp_utils.tcl")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "# Auto-generated TCL for ZynqMP Vitis driver flow")?;
+        writeln!(tcl)?;
+
+        // Build procedure
+        writeln!(tcl, "proc build {{dir}} {{")?;
+        writeln!(tcl, "    set xsa [file join $dir logic_1.xsa]")?;
+        writeln!(tcl, "    puts \"dir: $dir\"")?;
+        writeln!(tcl, "    setws driver_build/")?;
+        writeln!(tcl, "    puts \"xsa: $xsa\"")?;
+        writeln!(tcl, "    app create -name baremetal_driver -hw $xsa -proc psu_cortexa53_0 -os standalone -lang C -template {{Empty Application(C)}}")?;
+        writeln!(tcl, "    importsources -name baremetal_driver -path drivers/baremetal/src/")?;
+        writeln!(tcl, "    app build -name baremetal_driver hw_server")?;
+        writeln!(tcl, "}}")?;
+        writeln!(tcl)?;
+
+        // boot_jtag procedure
+        writeln!(tcl, "proc boot_jtag {{}} {{")?;
+        writeln!(tcl, "    targets -set -filter {{name =~ \"PSU\"}}")?;
+        writeln!(tcl, "    mwr 0xffca0010 0x0    ;# multiboot = 0")?;
+        writeln!(tcl, "    mwr 0xff5e0200 0x0100 ;# boot mode = JTAG")?;
+        writeln!(tcl, "    rst -system")?;
+        writeln!(tcl, "}}")?;
+        writeln!(tcl)?;
+
+        // flash procedure
+        writeln!(tcl, "proc flash {{dir}} {{")?;
+        writeln!(tcl, "    connect")?;
+        writeln!(tcl, "    boot_jtag")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    source driver_build/logic_1/hw/psu_init.tcl")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    targets -set -nocase -filter {{name =~\"APU*\"}}")?;
+        writeln!(tcl, "    rst -system")?;
+        writeln!(tcl, "    after 3000")?;
+        writeln!(tcl, "    targets -set -nocase -filter {{name =~\"APU*\"}}")?;
+        writeln!(tcl, "    reset_apu")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    set bitfile [file join $dir logic_1.bit]")?;
+        writeln!(tcl, "    puts \"Programming bitstream: $bitfile\"")?;
+        writeln!(tcl, "    fpga -file $bitfile")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    targets -set -nocase -filter {{name =~\"APU*\"}}")?;
+        writeln!(tcl, "    loadhw -hw driver_build/logic_1/hw/logic_1.xsa -mem-ranges [list {{0x80000000 0xbfffffff}} {{0x400000000 0x5ffffffff}} {{0x1000000000 0x7fffffffff}}] -regs")?;
+        writeln!(tcl, "    configparams force-mem-access 1")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    set mode [expr {{[mrd -value 0xFF5E0200] & 0xf}}]")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    targets -set -nocase -filter {{name =~ \"*A53*#0\"}}")?;
+        writeln!(tcl, "    rst -processor")?;
+        writeln!(tcl, "    dow driver_build/logic_1/export/logic_1/sw/logic_1/boot/fsbl.elf")?;
+        writeln!(tcl, "    set bp_16_2_fsbl_bp [bpadd -addr &XFsbl_Exit]")?;
+        writeln!(tcl, "    con -block -timeout 60")?;
+        writeln!(tcl, "    bpremove $bp_16_2_fsbl_bp")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    set part0 [file join $dir logic_1_part.bin]")?;
+        writeln!(tcl, "    set part1 [file join $dir logic_2_part.bin]")?;
+        writeln!(tcl, "    set size [file size $part0]")?;
+        writeln!(tcl, "    mwr -bin -file $part0 0x0800000000 $size")?;
+        writeln!(tcl, "    mwr -bin -file $part1 0x08000C0000 $size")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "    rst -processor")?;
+        writeln!(tcl, "    dow driver_build/baremetal_driver/Debug/baremetal_driver.elf")?;
+        writeln!(tcl, "    configparams force-mem-access 0")?;
+        writeln!(tcl, "    bpadd -addr &main")?;
+        writeln!(tcl, "    con -block -timeout 500")?;
+        writeln!(tcl, "    con")?;
+        writeln!(tcl, "}}")?;
+        writeln!(tcl)?;
+
+        // CLI-like command handling
+        writeln!(tcl, "if {{[llength $argv] == 0}} {{")?;
+        writeln!(tcl, "    puts \"Usage: xsct zynq_driver.tcl <build|flash|all>\"")?;
+        writeln!(tcl, "    exit")?;
+        writeln!(tcl, "}}")?;
+        writeln!(tcl)?;
+        writeln!(tcl, "set dir \"{}\"", dir)?;
+        writeln!(tcl)?;
+        writeln!(tcl, "set cmd $argv")?;
+        writeln!(tcl, "switch -- $cmd {{")?;
+        writeln!(tcl, "    build {{ build $dir }}")?;
+        writeln!(tcl, "    flash {{ flash $dir }}")?;
+        writeln!(tcl, "    all   {{ build $dir; flash $dir }}")?;
+        writeln!(tcl, "    default {{ puts \"Unknown argument: $cmd\"; exit 1 }}")?;
+        writeln!(tcl, "}}")?;
+
+        println!("Generated zynq_driver.tcl successfully");
+        Ok(())
+    }
+
 }

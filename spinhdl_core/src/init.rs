@@ -1,5 +1,5 @@
-use serde::{Deserialize, Deserializer};
 use crate::core::{Build, ModuleType};
+use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Deserialize)]
 pub struct DesignCfg {

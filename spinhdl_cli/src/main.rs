@@ -25,10 +25,18 @@ enum Commands {
         config: PathBuf,
     },
 
+    Emit {
+        #[arg(default_value = "spinhdl.toml")]
+        config: PathBuf,
+        #[arg(long, default_value = "build/main")]
+        dir: String,
+    },
+
     Clean {
         #[arg(default_value = "spinhdl.toml")]
         config: PathBuf,
     },
+
 }
 
 fn main() {
@@ -42,6 +50,14 @@ fn main() {
             println!("Project version: {}", cfg.projectcfg.version);
             cfg.verify_build_setup();
             cfg.build_designs();
+        }
+        Commands::Emit { config, dir } => {
+            let mut cfg = load_config(&config);
+            println!("Project name: {}", cfg.projectcfg.name);
+            println!("Project version: {}", cfg.projectcfg.version);
+            if let Err(e) = cfg.create_zynq_driver_tcl(&dir) {
+                panic!("Error creating zynq driver TCL {}", e);
+            }
         }
         _ => {
             panic!("Command currently not supported");
