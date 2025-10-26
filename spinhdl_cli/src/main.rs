@@ -31,17 +31,19 @@ enum Commands {
         #[arg(long, default_value = "build/main")]
         dir: String,
     },
+    Dryrun {
+        #[arg(default_value = "spinhdl.toml")]
+        config: PathBuf,
+    },
 
     Clean {
         #[arg(default_value = "spinhdl.toml")]
         config: PathBuf,
     },
-
 }
 
 fn main() {
-
-   let cli = Cli::parse();
+    let cli = Cli::parse();
 
     match cli.command {
         Commands::Weave { config } => {
@@ -59,6 +61,13 @@ fn main() {
                 panic!("Error creating zynq driver TCL {}", e);
             }
         }
+
+        Commands::Dryrun { config } => {
+            let mut cfg = load_config(&config);
+            cfg.create_build_tasks();
+            println!("{:#?}", cfg.tasks);
+        }
+
         _ => {
             panic!("Command currently not supported");
         }

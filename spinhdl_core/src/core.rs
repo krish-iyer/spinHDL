@@ -1,16 +1,24 @@
 use crate::design_hier;
+use crate::flow_manager::*;
 
 use super::init::*;
-use serde::{Deserialize};
+use serde::Deserialize;
 use std::{env, fs, fs::File, path::Path, process::Command};
 use std::{io, io::Error, io::ErrorKind};
 
 pub mod create_tcl;
 
-
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum Build {
+pub enum BuildTasks {
+    Synth,
+    Route,
+    Bitgen,
+}
+
+pub enum BuildIntrTasks {
+    VerifyFiles,
+    CreateProject,
     Synth,
     Route,
     Bitgen,
@@ -48,6 +56,8 @@ pub struct BuildCfg {
     pub hier: Vec<design_hier::DesignEntry>,
     #[serde(skip)]
     pub design_graph: design_hier::HierarchyGraph,
+    #[serde(skip)]
+    pub tasks: FlowManager,
 }
 
 pub struct PrXdc {
@@ -91,10 +101,34 @@ impl BuildCfg {
 
             env::set_current_dir(build_dir).expect("Failed to change directory to build");
 
-            design.populate_files();
             design.verify_files_exist();
 
             env::set_current_dir(cur_dir).expect("Failed to change directory to build");
+        }
+    }
+
+    pub fn create_build_tasks(&mut self) {
+        self.tasks = FlowManager::new();
+        for design in &self.designcfg {
+            let mut t = Task::new(&design.name);
+            t.add_subtask(SubTask::new("verify_files"));
+            t.add_subtask(SubTask::new("create_project"));
+
+            if design.build == BuildTasks::Synth {
+                t.add_subtask(SubTask::new("synth"));
+            } else if design.build == BuildTasks::Route {
+                t.add_subtask(SubTask::new("synth"));
+                t.add_subtask(SubTask::new("route"));
+            } else if design.build == BuildTasks::Bitgen {
+                t.add_subtask(SubTask::new("synth"));
+                t.add_subtask(SubTask::new("route"));
+                t.add_subtask(SubTask::new("bitgen"));
+            }
+
+            self.tasks.upsert_task(t);
+        }
+        if let Err(e) = self.tasks.save_to_toml("spinhdl.lock") {
+            panic!("Failed in saving lock file {}", e);
         }
     }
 
@@ -179,11 +213,11 @@ impl BuildCfg {
             }
 
             // synth
-            if design.build == Build::Synth {
-                if let Err(e) = self.run_tcl("run_synth.tcl") {
-                    panic!("Run Synth failed for {} : {}", design.name, e);
-                }
+            //if design.build == BuildTasks::Synth {
+            if let Err(e) = self.run_tcl("run_synth.tcl") {
+                panic!("Run Synth failed for {} : {}", design.name, e);
             }
+            //}
 
             // symlink
             // match design.moduletype {

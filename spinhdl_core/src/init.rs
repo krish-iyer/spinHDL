@@ -1,4 +1,4 @@
-use crate::core::{Build, ModuleType};
+use crate::core::{BuildTasks, ModuleType};
 use serde::{Deserialize, Deserializer};
 
 #[derive(Debug, Deserialize)]
@@ -17,7 +17,7 @@ pub struct DesignCfg {
     pub ip_dir: String,
     #[serde(deserialize_with = "parse_files_list")]
     pub ip: Vec<String>,
-    pub build: Build,
+    pub build: BuildTasks,
     pub moduletype: ModuleType,
     #[serde(skip)]
     pub rtl_files: Vec<String>,
@@ -39,7 +39,9 @@ impl DesignCfg {
         self.ip_files = populate_files_list(&self.ip_dir, &self.ip);
     }
 
-    pub fn verify_files_exist(&self) {
+    pub fn verify_files_exist(&mut self) {
+        self.populate_files();
+
         for file in &self.rtl_files {
             if !std::path::Path::new(file).exists() {
                 println!("Missing RTL file: {}", file);
