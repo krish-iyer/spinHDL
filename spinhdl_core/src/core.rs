@@ -1,6 +1,7 @@
 use crate::design_hier;
-use crate::flow_manager::*;
+use crate::flow_graph::*;
 
+use glob::glob;
 use super::init::*;
 use serde::Deserialize;
 use std::{env, fs, fs::File, path::Path, process::Command};
@@ -8,7 +9,7 @@ use std::{io, io::Error, io::ErrorKind};
 
 pub mod create_tcl;
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub enum BuildTasks {
     Synth,
@@ -57,7 +58,7 @@ pub struct BuildCfg {
     #[serde(skip)]
     pub design_graph: design_hier::HierarchyGraph,
     #[serde(skip)]
-    pub tasks: FlowManager,
+    pub flow_graph: FlowGraph,
 }
 
 pub struct PrXdc {
@@ -107,31 +108,6 @@ impl BuildCfg {
         }
     }
 
-    pub fn create_build_tasks(&mut self) {
-        self.tasks = FlowManager::new();
-        for design in &self.designcfg {
-            let mut t = Task::new(&design.name);
-            t.add_subtask(SubTask::new("verify_files"));
-            t.add_subtask(SubTask::new("create_project"));
-
-            if design.build == BuildTasks::Synth {
-                t.add_subtask(SubTask::new("synth"));
-            } else if design.build == BuildTasks::Route {
-                t.add_subtask(SubTask::new("synth"));
-                t.add_subtask(SubTask::new("route"));
-            } else if design.build == BuildTasks::Bitgen {
-                t.add_subtask(SubTask::new("synth"));
-                t.add_subtask(SubTask::new("route"));
-                t.add_subtask(SubTask::new("bitgen"));
-            }
-
-            self.tasks.upsert_task(t);
-        }
-        if let Err(e) = self.tasks.save_to_toml("spinhdl.lock") {
-            panic!("Failed in saving lock file {}", e);
-        }
-    }
-
     pub fn parse_hierarchy(&mut self) {
         for d in &self.hier {
             self.design_graph.add_design(&d.name);
@@ -149,6 +125,176 @@ impl BuildCfg {
                         .connect_module_to_design_impl(&m.name, impl_design);
                 }
             }
+        }
+    }
+
+    pub fn build_flow_graph(&mut self) {
+        self.flow_graph = FlowGraph::new();
+
+        for d in &self.designcfg {
+            let name = &d.name;
+            self.flow_graph.depend(
+                (name, BuildStage::VerifyFiles),
+                (name, BuildStage::CreateProject),
+            );
+            self.flow_graph
+                .depend((name, BuildStage::CreateProject), (name, BuildStage::Synth));
+
+            match d.build {
+                BuildTasks::Synth => { /* nothing more */ }
+                BuildTasks::Route => {
+                    self.flow_graph
+                        .depend((name, BuildStage::Synth), (name, BuildStage::Route));
+                }
+                BuildTasks::Bitgen => {
+                    self.flow_graph
+                        .depend((name, BuildStage::Synth), (name, BuildStage::Route));
+                    self.flow_graph
+                        .depend((name, BuildStage::Route), (name, BuildStage::Bitgen));
+                }
+            }
+
+            let base = format!("{}/{}", self.projectcfg.build_dir, name);
+
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::CreateProject,
+                &format!("{}/create_project.tcl", base),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::CreateProject,
+                &format!("{}/{}.xpr", base, name),
+            );
+
+            // synth stage
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Synth,
+                &format!("{}/run_synth.tcl", base),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Synth,
+                &format!("{}/{}/runs/synth_1", base, name),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Synth,
+                &format!("{}/{}.dcp", self.projectcfg.build_dir, name),
+            );
+
+            // route stage
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Route,
+                &format!("{}/run_route.tcl", base),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Route,
+                &format!("{}/{}.runs", base, name),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Route,
+                &format!("{}/*_routed.dcp", base),
+            );
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Route,
+                &format!("{}/run_route.tcl", base),
+            );
+
+            // bitgen stage
+            self.flow_graph.add_artifact(
+                name,
+                BuildStage::Bitgen,
+                &format!("{}/run_bitgen*.tcl", base),
+            );
+            self.flow_graph
+                .add_artifact(name, BuildStage::Bitgen, &format!("{}/*.bit", base));
+            self.flow_graph
+                .add_artifact(name, BuildStage::Bitgen, &format!("{}/*.bin", base));
+            self.flow_graph
+                .add_artifact(name, BuildStage::Bitgen, &format!("{}/*.prm", base));
+            self.flow_graph
+                .add_artifact(name, BuildStage::Bitgen, &format!("{}/*.xsa", base));
+        }
+
+        if let Some(root_design) = self.root.design.as_ref() {
+            // add aditional artifacts related to main in PR
+
+            let base = format!("{}/{}", self.projectcfg.build_dir, root_design);
+            self.flow_graph.add_artifact(
+                root_design,
+                BuildStage::Route,
+                &format!("{}/pr_main.xdc", base),
+            );
+            self.flow_graph.add_artifact(
+                root_design,
+                BuildStage::Route,
+                &format!("{}/create_pr_xdc.tcl", base),
+            );
+
+            let mut hier_by_name = std::collections::HashMap::new();
+            for h in &self.hier {
+                hier_by_name.insert(h.name.as_str(), h);
+            }
+            if let Some(root_h) = hier_by_name.get(root_design.as_str()) {
+                let root_depth = self
+                    .designcfg
+                    .iter()
+                    .find(|d| &d.name == root_design)
+                    .map(|d| d.build)
+                    .unwrap_or(BuildTasks::Bitgen);
+
+                for m in &root_h.modules {
+                    for rm in &m.rm {
+                        let _ = self.flow_graph.ensure_node(rm, BuildStage::Synth);
+                        if matches!(root_depth, BuildTasks::Route | BuildTasks::Bitgen) {
+                            self.flow_graph
+                                .depend((rm, BuildStage::Synth), (root_design, BuildStage::Route));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn revert_stage(&self, design: &str, stage: BuildStage) {
+        if let Some(files) = self.flow_graph.get_artifacts(design, stage) {
+            println!("Reverting stage {:?} for design {}", stage, design);
+
+            for pattern in files {
+                let paths: Vec<_> = match glob(pattern) {
+                    Ok(paths) => paths.filter_map(Result::ok).collect(),
+                    Err(_) => vec![],
+                };
+
+                let targets = if paths.is_empty() {
+                    vec![std::path::PathBuf::from(pattern)]
+                } else {
+                    paths
+                };
+
+                for path in targets {
+                    if path.exists() {
+                        let result = fs::remove_dir_all(&path).or_else(|_| fs::remove_file(&path));
+                        match result {
+                            Ok(_) => println!("Removed {}", path.display()),
+                            Err(e) => eprintln!("Failed to delete {}: {}", path.display(), e),
+                        }
+                    } else {
+                        eprintln!("No such file or directory: {}", path.display());
+                    }
+                }
+            }
+        } else {
+            eprintln!(
+                "No artifacts found for design '{}' at stage {:?}",
+                design, stage
+            );
         }
     }
 
@@ -256,7 +402,7 @@ impl BuildCfg {
         for rm in &rm_designs {
             match rm {
                 design_hier::NodeKind::Design { name } => {
-                    let tcl_path = format!("generate_bit_{}.tcl", name);
+                    let tcl_path = format!("run_bitgen_{}.tcl", name);
                     if let Err(e) = self.run_tcl(&tcl_path) {
                         panic! {"Failed to run bitstreams generation {}", e};
                     };
@@ -318,7 +464,7 @@ impl BuildCfg {
             };
 
             // route
-            if let Err(e) = self.run_tcl("route_pr.tcl") {
+            if let Err(e) = self.run_tcl("run_route.tcl") {
                 panic! {"Failed to create Route {}", e};
             };
 

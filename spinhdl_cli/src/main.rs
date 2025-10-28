@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use spinhdl_core::BuildCfg;
+use spinhdl_core::{BuildCfg, BuildStage};
 use std::{fs, path::PathBuf};
 
 #[derive(Parser)]
@@ -40,6 +40,13 @@ enum Commands {
         #[arg(default_value = "spinhdl.toml")]
         config: PathBuf,
     },
+
+    Revert {
+        design: String,
+        stage: String,
+        #[arg(default_value = "spinhdl.toml")]
+        config: PathBuf,
+    },
 }
 
 fn main() {
@@ -64,8 +71,36 @@ fn main() {
 
         Commands::Dryrun { config } => {
             let mut cfg = load_config(&config);
-            cfg.create_build_tasks();
-            println!("{:#?}", cfg.tasks);
+            // let fg = FlowGraph::from_toml_file("build/flow.lock.toml")?;
+            // fg.print_hierarchy();
+            // cfg.create_build_tasks();
+            cfg.build_flow_graph();
+            cfg.flow_graph.print_hierarchy();
+            println!(
+                "Topo order:\n  {}",
+                cfg.flow_graph.topo_order().join("\n  ")
+            );
+            //println!("{:#?}", cfg.tasks);
+            let dot = cfg.flow_graph.to_dot();
+            std::fs::write("flow.dot", dot);
+        }
+
+        Commands::Revert {
+            config,
+            design,
+            stage,
+        } => {
+            let mut cfg = load_config(&config);
+            cfg.build_flow_graph();
+
+            let Some(stage_enum) = BuildStage::from_str(&stage) else {
+                    panic!(
+                        "Unknown stage '{}'. Expected one of: verify_files, create_project, synth, route, bitgen.",
+                        stage
+                    );
+            };
+
+            cfg.revert_stage(&design, stage_enum);
         }
 
         _ => {

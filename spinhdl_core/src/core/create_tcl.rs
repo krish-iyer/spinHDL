@@ -147,7 +147,7 @@ impl BuildCfg {
             .design_graph
             .get_child_nodes(&pr_inst.instance_name, false);
 
-        let tcl_path = "route_pr.tcl";
+        let tcl_path = "run_route.tcl";
 
         let mut tcl = File::create(tcl_path)?;
 
@@ -208,7 +208,7 @@ impl BuildCfg {
         for rm in &rm_designs {
             match rm {
                 design_hier::NodeKind::Design { name } => {
-                    let tcl_path = format!("generate_bit_{}.tcl", name);
+                    let tcl_path = format!("run_bitgen_{}.tcl", name);
 
                     let mut tcl = File::create(&tcl_path)?;
 
