@@ -152,25 +152,6 @@ impl BuildCfg {
         }
     }
 
-    pub fn gen_project(&self) -> io::Result<()> {
-        let status = Command::new("vivado")
-            .args([
-                "-nojournal",
-                "-nolog",
-                "-mode",
-                "batch",
-                "-source",
-                "create_project.tcl",
-            ])
-            .status()?;
-
-        if !status.success() {
-            return Err(Error::new(ErrorKind::Other, format!("Gen Project failed")));
-        }
-
-        Ok(())
-    }
-
     pub fn run_tcl(&self, tcl: &str) -> io::Result<()> {
         // check if the tcl exists
         if !Path::new(tcl).exists() {
@@ -204,7 +185,7 @@ impl BuildCfg {
 
             println!("Running Vivado for design '{}'", design.name);
 
-            if let Err(e) = self.gen_project() {
+            if let Err(e) = self.run_tcl("create_project.tcl") {
                 panic!("Vivado failed for {} : {}", design.name, e);
             }
 
